@@ -1,0 +1,33 @@
+{
+  "name": "dinoventuresbackendassignment",
+  "version": "1.0.0",
+  "description": "This is an backend related assignment",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "nodemon src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tharun-77/DinoVenturesBackendAssignment.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Tharun-77/DinoVenturesBackendAssignment/issues"
+  },
+  "homepage": "https://github.com/Tharun-77/DinoVenturesBackendAssignment#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.2.3",
+    "nodemon": "^3.1.11",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
