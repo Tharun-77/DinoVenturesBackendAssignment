@@ -1,0 +1,92 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TransactionType {
+  TOPUP
+  BONUS
+  SPEND
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallets      Wallet[]
+  transactions Transaction[]
+
+  @@map("users")
+}
+
+model Asset {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  wallets Wallet[]
+
+  @@map("assets")
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String
+  assetId   String
+  balance   Decimal  @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset  Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  ledgerEntries LedgerEntry[]
+
+  @@unique([userId, assetId])   // 🔥 Very important
+  @@index([userId])
+  @@index([assetId])
+  @@map("wallets")
+}
+
+model Transaction {
+  id              String            @id @default(uuid())
+  userId          String
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  idempotencyKey  String            @unique
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries LedgerEntry[]
+
+  @@index([userId])
+  @@index([userId,createdAt])
+  @@map("transactions")
+}
+
+model LedgerEntry {
+  id            String   @id @default(uuid())
+  walletId      String
+  transactionId String
+  amount        Decimal  
+  createdAt     DateTime @default(now())
+
+  wallet      Wallet      @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([transactionId])
+  @@map("ledger_entries")
+}
