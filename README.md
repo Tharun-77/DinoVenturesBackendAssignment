@@ -286,7 +286,7 @@ The entire stack — API, PostgreSQL, migrations, and seed — runs with two com
 
 ```bash
 # 1. Clone and configure
-git clone https://github.com/Tharun-77/DinoVenturesBackendAssignment
+git clone https://github.com/Tharun-77/DinoVenturesBackendAssignment.git
 cd wallet-service
 cp .env.example .env          # Edit DATABASE_URL if needed
 
