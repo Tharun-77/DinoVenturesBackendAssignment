@@ -7,12 +7,13 @@
 ## 📌 Table of Contents
 
 - [Overview](#-overview)
-- [Tech Stack](#-tech-stack)
+- [Tech Stack & Why](#-tech-stack--why)
 - [Architecture](#-architecture)
 - [Core Features](#-core-features)
+- [Concurrency Strategy](#-concurrency-strategy)
 - [Database Design](#-database-design)
 - [API Endpoints](#-api-endpoints)
-- [Getting Started](#-getting-started)
+- [Database Setup & Seeding](#-database-setup--seeding)
 - [Environment Variables](#-environment-variables)
 - [Engineering Highlights](#-engineering-highlights)
 
@@ -32,15 +33,28 @@ This service powers a **closed-loop internal currency system** (Gold Coins, Diam
 
 ---
 
-## 🛠 Tech Stack
+## 🛠 Tech Stack & Why
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js |
-| Framework | Express |
-| Database | PostgreSQL (ACID-compliant) |
-| Containerization | Docker & Docker Compose |
-| ID Strategy | UUID (collision-safe, distributed-ready) |
+Every technology choice was deliberate — not convenience, but fitness for a financial-grade system.
+
+| Layer | Technology | Why |
+|---|---|---|
+| Runtime | **Node.js** | Non-blocking I/O handles high-concurrency wallet requests efficiently; large ecosystem for financial tooling |
+| Framework | **Express** | Minimal and unopinionated — full control over middleware, error handling, and transaction flow without magic |
+| ORM | **Prisma** | Type-safe database access, clean migration management, and excellent PostgreSQL support; reduces raw SQL errors in critical paths |
+| Database | **PostgreSQL** | True ACID transactions, row-level locking (`SELECT FOR UPDATE`), serializable isolation, and battle-tested reliability at scale |
+| Containerization | **Docker & Docker Compose** | Eliminates environment drift; one-command startup ensures reviewer, CI, and production all run identically |
+| ID Strategy | **UUID v4** | Collision-safe, non-sequential (no enumeration attacks), distributed-ready without a central ID authority |
+
+### Why PostgreSQL over alternatives?
+
+This was not a default choice. The decision matrix:
+
+- **MongoDB** — rejected. Document stores lack true multi-document ACID transactions, making double-entry ledger writes unsafe under failure.
+- **MySQL** — viable, but PostgreSQL's `SELECT FOR UPDATE`, richer isolation modes, and advisory locks make it the superior choice for financial workloads.
+- **Redis** — considered as a cache layer only. Persistence guarantees are insufficient for monetary source-of-truth data.
+
+> PostgreSQL's row-level locking is the cornerstone of this system's correctness.
 
 ---
 
@@ -118,11 +132,7 @@ ROLLBACK;
 
 ### 4️⃣ Concurrency Control & Deadlock Prevention
 
-Race conditions are prevented through:
-
-- `SELECT ... FOR UPDATE` — row-level locking per wallet
-- **Consistent lock ordering** (Treasury → User, always) to eliminate deadlocks
-- Validated under concurrent stress: simultaneous spend requests are serialized safely, with no negative balances possible
+See the dedicated [Concurrency Strategy](#-concurrency-strategy) section below for a full breakdown.
 
 ### 5️⃣ Idempotency
 
@@ -147,6 +157,77 @@ All currency flows through a **Treasury wallet** — acting as the canonical sou
 Credit flow:   Treasury ──► User
 Spend flow:    User ──► Treasury
 ```
+
+---
+
+## ⚙️ Concurrency Strategy
+
+Concurrency is the hardest problem in any financial system. A naive implementation that simply reads a balance, checks it, then updates it will fail under simultaneous requests — producing negative balances, double-spends, or corrupted state. This service addresses every layer of the problem.
+
+### The Problem: Read-Modify-Write Race
+
+```
+Thread A: READ balance = 100  ─┐
+Thread B: READ balance = 100   │  ← Both see 100
+Thread A: SPEND 100 → write 0  │
+Thread B: SPEND 100 → write 0  │  ← Both succeed. Balance should be -100.
+```
+
+Without locking, both threads pass the balance check and commit — resulting in a negative balance.
+
+### Solution 1: `SELECT ... FOR UPDATE` (Pessimistic Locking)
+
+Before any wallet mutation, the service acquires an **exclusive row-level lock** on the wallet record:
+
+```sql
+BEGIN;
+  SELECT * FROM wallets
+  WHERE id = $walletId
+  FOR UPDATE;              -- All other transactions must wait here
+
+  -- Safe to read, validate, and write
+  UPDATE wallets SET balance = balance - $amount WHERE id = $walletId;
+COMMIT;
+```
+
+`FOR UPDATE` causes any concurrent transaction that tries to lock the same wallet to **block and wait** — not fail silently. Once the first transaction commits or rolls back, the next one proceeds with the freshly committed balance. This turns a race condition into a serialized queue.
+
+### Solution 2: Consistent Lock Ordering (Deadlock Prevention)
+
+When a single operation touches **two wallets** (e.g. a top-up moves funds from Treasury → User), naive locking can deadlock:
+
+```
+Thread A locks Treasury, waits for User  ─┐
+Thread B locks User, waits for Treasury   │ ← Deadlock
+```
+
+The fix is a **deterministic lock acquisition order**: wallets are always locked by their UUID, sorted ascending. Since UUIDs are fixed, Treasury and User are always locked in the same order regardless of which thread gets there first — making a circular wait impossible.
+
+```typescript
+// Always sort wallet IDs before locking — deadlock impossible
+const walletsToLock = [treasuryWalletId, userWalletId].sort();
+for (const walletId of walletsToLock) {
+  await tx.$queryRaw`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`;
+}
+```
+
+### Solution 3: Database-Level Balance Constraint
+
+As a final safety net, a `CHECK` constraint ensures balance can never go negative at the database level — even if application logic has a bug:
+
+```sql
+ALTER TABLE wallets ADD CONSTRAINT balance_non_negative CHECK (balance >= 0);
+```
+
+### Solution 4: Idempotency as Concurrency Protection
+
+Rapid retries from clients (network timeouts, mobile reconnects) are another form of concurrency risk. The `idempotency_key` unique constraint on the `transactions` table guarantees that even if the same request hits the server twice simultaneously, only one will succeed — the second will hit a unique constraint violation and return the original result.
+
+### What Was Tested
+
+- Simultaneous `SPEND` requests from multiple clients on the same wallet — no negative balances observed
+- Concurrent `TOP_UP` + `SPEND` — correct final balances in all cases
+- Duplicate requests with the same `Idempotency-Key` — exactly one transaction created
 
 ---
 
@@ -190,36 +271,103 @@ All write endpoints require an `Idempotency-Key` header.
 
 ---
 
-## 🐳 Getting Started
+## 🐳 Database Setup & Seeding
 
 ### Prerequisites
 
-- [Docker](https://www.docker.com/) & Docker Compose installed
+- [Docker](https://www.docker.com/) & Docker Compose
+- Node.js 18+ (for local setup without Docker)
 
-### One-Command Startup
+---
+
+### Option A: Docker (Recommended)
+
+The entire stack — API, PostgreSQL, migrations, and seed — runs with two commands.
 
 ```bash
-# Clone the repository
+# 1. Clone and configure
 git clone https://github.com/Tharun-77/DinoVenturesBackendAssignment
 cd wallet-service
+cp .env.example .env          # Edit DATABASE_URL if needed
 
-# Start everything (API + PostgreSQL)
-docker-compose up --build
+# 2. Start PostgreSQL + API
+docker-compose up --build -d
 
-# Seed initial data (Treasury accounts, asset types)
+# 3. Run Prisma migrations (creates all tables + indexes)
+docker-compose exec app npx prisma migrate deploy
+
+# 4. Seed the database
 docker-compose exec app npm run seed
 ```
 
-The API will be available at `http://localhost:3000`.
+The seed script creates:
+- System asset types: `GOLD_COINS`, `DIAMONDS`
+- A Treasury system user (`isSystem: true`) with a wallet per asset
+- Sample regular users with wallets, ready for transactions
 
-### Running Locally (without Docker)
+The API is available at `http://localhost:3000`.
+
+---
+
+### Option B: Local (Without Docker)
 
 ```bash
+# 1. Install dependencies
 npm install
-cp .env.example .env   # Fill in your DB credentials
-npm run migrate
+
+# 2. Configure environment
+cp .env.example .env
+# Set DATABASE_URL to your local PostgreSQL instance
+
+# 3. Run migrations — creates all tables, constraints, and indexes
+npx prisma migrate dev
+
+# 4. (Optional) Open Prisma Studio to inspect the DB visually
+npx prisma studio
+
+# 5. Seed the database
 npm run seed
-npm start
+
+# 6. Start the server
+npm run dev
+```
+
+---
+
+### What the Seed Script Does
+
+```
+Seed sequence:
+  1. Create assets        → GOLD_COINS, DIAMONDS
+  2. Create Treasury user → isSystem: true
+  3. Create Treasury wallets (one per asset, pre-funded)
+  4. Create sample users  → alice@example.com, bob@example.com
+  5. Create user wallets  → zero balance, ready for top-up
+```
+
+To reset and re-seed from scratch:
+
+```bash
+# Docker
+docker-compose exec app npx prisma migrate reset --force
+
+# Local
+npx prisma migrate reset --force
+```
+
+> ⚠️ `migrate reset` drops and recreates the entire database. Never run in production.
+
+---
+
+### Verifying Setup
+
+```bash
+# Check all tables exist
+docker-compose exec db psql -U postgres -d wallet_db -c "\dt"
+
+# Confirm Treasury wallet exists
+docker-compose exec db psql -U postgres -d wallet_db \
+  -c "SELECT u.name, a.symbol, w.balance FROM wallets w JOIN users u ON u.id = w.user_id JOIN assets a ON a.id = w.asset_id;"
 ```
 
 ---
