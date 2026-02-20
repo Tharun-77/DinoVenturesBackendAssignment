@@ -4,25 +4,15 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-}
-
-enum TransactionType {
-  TOPUP
-  BONUS
-  SPEND
-}
-
-enum TransactionStatus {
-  PENDING
-  SUCCESS
-  FAILED
+  url      = env("DATABASE_URL")
 }
 
 model User {
   id        String   @id @default(uuid())
+  name      String
   email     String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isSystem  Boolean  @default(false) @map("is_system")
+  createdAt DateTime @default(now()) @map("created_at")
 
   wallets      Wallet[]
   transactions Transaction[]
@@ -33,7 +23,8 @@ model User {
 model Asset {
   id        String   @id @default(uuid())
   name      String   @unique
-  createdAt DateTime @default(now())
+  symbol    String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
 
   wallets Wallet[]
 
@@ -42,51 +33,60 @@ model Asset {
 
 model Wallet {
   id        String   @id @default(uuid())
-  userId    String
-  assetId   String
-  balance   Decimal  @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  userId    String   @map("user_id")
+  assetId   String   @map("asset_id")
+  balance   Decimal  @default(0) @db.Decimal(20, 4)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  asset  Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
-
+  user         User           @relation(fields: [userId], references: [id])
+  asset        Asset          @relation(fields: [assetId], references: [id])
   ledgerEntries LedgerEntry[]
 
-  @@unique([userId, assetId])   // 🔥 Very important
-  @@index([userId])
-  @@index([assetId])
+  @@unique([userId, assetId])
   @@map("wallets")
 }
 
 model Transaction {
-  id              String            @id @default(uuid())
-  userId          String
-  type            TransactionType
-  status          TransactionStatus @default(PENDING)
-  idempotencyKey  String            @unique
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  id             String            @id @default(uuid())
+  userId         String            @map("user_id")
+  type           TransactionType
+  status         TransactionStatus @default(PENDING)
+  assetId        String            @map("asset_id")
+  amount         Decimal           @db.Decimal(20, 4)
+  idempotencyKey String            @unique @map("idempotency_key")
+  metadata       Json?
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
 
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id])
   ledgerEntries LedgerEntry[]
 
-  @@index([userId])
-  @@index([userId,createdAt])
   @@map("transactions")
 }
 
 model LedgerEntry {
   id            String   @id @default(uuid())
-  walletId      String
-  transactionId String
-  amount        Decimal  
-  createdAt     DateTime @default(now())
+  walletId      String   @map("wallet_id")
+  transactionId String   @map("transaction_id")
+  amount        Decimal  @db.Decimal(20, 4) // positive = credit, negative = debit
+  balanceAfter  Decimal  @db.Decimal(20, 4) @map("balance_after")
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  wallet      Wallet      @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  wallet      Wallet      @relation(fields: [walletId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
 
-  @@index([walletId])
-  @@index([transactionId])
   @@map("ledger_entries")
+}
+
+enum TransactionType {
+  TOPUP
+  BONUS
+  SPEND
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
 }

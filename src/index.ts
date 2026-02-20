@@ -1,20 +1,35 @@
-import express from 'express';
-import helmet from 'helmet';
-import cors from 'cors';
+import 'dotenv/config';
+import app from './app';
+import prisma from './db/prisma';
+import { logger } from './utils/logger';
 
-const app = express();
-//for security purposes, we are disabling the content security policy as it can interfere with some of the features of our application. In a production environment, you should configure the content security policy according to your application's needs.
-app.use(
-    helmet({
-        contentSecurityPolicy: false, 
-    })
-);
-// Middleware
-app.use(express.json());
-// Enable CORS for all routes
-app.use(cors());
+const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
+async function main() {
+    // Verify database connection
+    await prisma.$connect();
+    logger.info('Database connected');
 
-app.listen(3000, () => {
-    console.log('Server is running on port 3000');
+    const server = app.listen(PORT, () => {
+        logger.info(`Wallet service running on http://localhost:${PORT}`);
+        logger.info(`Environment: ${process.env.NODE_ENV ?? 'development'}`);
+    });
+
+    // Graceful shutdown
+    const shutdown = async (signal: string) => {
+        logger.info(`Received ${signal}, shutting down...`);
+        server.close(async () => {
+            await prisma.$disconnect();
+            logger.info('Database disconnected. Goodbye.');
+            process.exit(0);
+        });
+    };
+
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+main().catch((err) => {
+    logger.error('Failed to start server', { err });
+    process.exit(1);
 });
