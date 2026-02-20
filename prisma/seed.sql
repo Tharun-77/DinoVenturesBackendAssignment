@@ -1,50 +1,36 @@
--- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
-INSERT INTO assets (id, name, "createdAt")
+INSERT INTO assets (id, name, symbol, created_at)
 VALUES
-  (gen_random_uuid(), 'Gold Coins', NOW()),
-  (gen_random_uuid(), 'Diamonds', NOW())
-ON CONFLICT (name) DO NOTHING;
+  ('a1000000-0000-0000-0000-000000000001', 'Gold Coins', 'GOLD',    NOW()),
+  ('a2000000-0000-0000-0000-000000000002', 'Diamonds',   'DIAMOND', NOW())
+ON CONFLICT (symbol) DO NOTHING;
 
-
-INSERT INTO users (id, email, "createdAt", "updatedAt")
-VALUES
-  (gen_random_uuid(), 'treasury@system.com', NOW(), NOW())
+-- Treasury (system account — source of all currency)
+INSERT INTO users (id, name, email, is_system, created_at)
+VALUES (
+  'u0000000-0000-0000-0000-000000000000',
+  'Treasury',
+  'treasury@system.internal',
+  true,
+  NOW()
+)
 ON CONFLICT (email) DO NOTHING;
 
-
-INSERT INTO users (id, email, "createdAt", "updatedAt")
+-- Regular users
+INSERT INTO users (id, name, email, is_system, created_at)
 VALUES
-  (gen_random_uuid(), 'user1@example.com', NOW(), NOW()),
-  (gen_random_uuid(), 'user2@example.com', NOW(), NOW())
+  ('u1000000-0000-0000-0000-000000000001', 'Alice', 'alice@example.com', false, NOW()),
+  ('u2000000-0000-0000-0000-000000000002', 'Bob',   'bob@example.com',   false, NOW())
 ON CONFLICT (email) DO NOTHING;
 
--- Gold Coins wallets
-INSERT INTO wallets (id, "userId", "assetId", balance, "createdAt", "updatedAt")
+INSERT INTO wallets (id, user_id, asset_id, balance, created_at, updated_at)
 SELECT
   gen_random_uuid(),
   u.id,
   a.id,
-  1000,
+  CASE WHEN u.is_system THEN 1000000 ELSE 0 END,  -- Treasury starts funded
   NOW(),
   NOW()
-FROM users u
-JOIN assets a ON a.name = 'Gold Coins'
-WHERE u.email IN ('treasury@system.com', 'user1@example.com', 'user2@example.com')
-ON CONFLICT DO NOTHING;
-
-
--- Diamonds wallets
-INSERT INTO wallets (id, "userId", "assetId", balance, "createdAt", "updatedAt")
-SELECT
-  gen_random_uuid(),
-  u.id,
-  a.id,
-  500,
-  NOW(),
-  NOW()
-FROM users u
-JOIN assets a ON a.name = 'Diamonds'
-WHERE u.email IN ('treasury@system.com', 'user1@example.com', 'user2@example.com')
-ON CONFLICT DO NOTHING;
+FROM users u, assets a
+ON CONFLICT (user_id, asset_id) DO NOTHING;
