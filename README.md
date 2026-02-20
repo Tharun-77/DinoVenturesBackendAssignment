@@ -200,7 +200,7 @@ All write endpoints require an `Idempotency-Key` header.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/wallet-service.git
+git clone https://github.com/Tharun-77/DinoVenturesBackendAssignment
 cd wallet-service
 
 # Start everything (API + PostgreSQL)
